@@ -27,6 +27,22 @@ export async function handleAutoReply(sock, msg, text) {
     const now = Date.now();
 
     /* =====================
+       ✅ OWNER MANUAL REPLY (FIX)
+       ⛔ JANGAN ADA LOGIC LAIN DI ATAS INI
+    ===================== */
+    if (msg.key.fromMe) {
+        console.log('✋ Owner replied manually → bot off');
+
+        await redis.multi()
+            .set(`user:${jid}:owner_replied_at`, now)
+            .set(`user:${jid}:state`, 'normal')
+            .del(`user:${jid}:ai_credit_shown`)
+            .exec();
+
+        return;
+    }
+
+    /* =====================
        BASIC GUARD
     ===================== */
     if (!isWaReady()) {
@@ -59,7 +75,7 @@ export async function handleAutoReply(sock, msg, text) {
         return;
     }
 
-    // ❌ MESSAGE TANPA TEXT (system, reaction, dll)
+    // ❌ MESSAGE TANPA TEXT
     if (!text || typeof text !== 'string') {
         return;
     }
@@ -205,7 +221,6 @@ Aturan penting:
 Kalau pertanyaan santai → jawab santai  
 Kalau pertanyaan serius → jawab tetap manusiawi
 
-
 CONTOH:
 User: Ilham orangnya gimana?
 AI: Santai tapi fokus 😄 Kalau kerja bisa serius, tapi ngobrol tetap enak.
@@ -220,7 +235,6 @@ SEKARANG JAWAB:
                 'Maaf ya, aku cuma bisa jawab hal-hal tentang Ilham 🙏';
         }
 
-        // credit AI hanya muncul pertama kali
         const aiCreditShown =
             await redis.get(`user:${jid}:ai_credit_shown`);
 

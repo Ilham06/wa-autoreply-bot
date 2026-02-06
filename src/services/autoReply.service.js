@@ -8,10 +8,18 @@ import { isOutsideWorkingHours } from '../utils/time.js';
 const SPAM_LIMIT = 5;
 const SPAM_WINDOW_MS = 10_000; // 10 detik
 
+const AI_MODE_TIMEOUT_MS = 60 * 60 * 1000; // 1 jam
+const OWNER_REPLY_TIMEOUT_MS = 60 * 60 * 1000; // 1 jam
+
 export async function handleAutoReply(sock, msg, text) {
     const jid =
         msg.key.remoteJidAlt || msg.key.remoteJid;
-        
+
+    const now = Date.now();
+
+    /* =====================
+       BASIC GUARD
+    ====================== */
     if (!isWaReady()) {
         await sock.sendMessage(jid, {
             text: 'Ilham lagi offline ya, nanti aku balas 🙏'
@@ -21,26 +29,12 @@ export async function handleAutoReply(sock, msg, text) {
 
     if (isOutsideWorkingHours()) {
         await sock.sendMessage(jid, {
-          text:
-            'Ilham lagi di luar jam kerja ya 🙏\n' +
-            'Nanti aktif lagi di jam kerja.'
+            text:
+                'Ilham lagi di luar jam kerja ya 🙏\n' +
+                'Nanti aktif lagi di jam kerja.'
         });
         return;
-      }
-
-
-    const ownerReplied =
-        await redis.get(`user:${jid}:owner_replied`);
-
-    if (ownerReplied) {
-        console.log('🙋 owner already replied, bot off');
-        return;
     }
-
-
-    await delay(1200);
-
-    
 
     // hanya chat pribadi
     if (
@@ -48,20 +42,61 @@ export async function handleAutoReply(sock, msg, text) {
         !jid.endsWith('@lid')
     ) return;
 
-    // cek owner status
+    /* =====================
+       LAST INTERACTION
+    ====================== */
+    const lastInteractionAt =
+        Number(await redis.get(`user:${jid}:last_interaction_at`)) || 0;
+
+    const inactiveTooLong =
+        lastInteractionAt &&
+        now - lastInteractionAt > AI_MODE_TIMEOUT_MS;
+
+    if (inactiveTooLong) {
+        console.log('⏳ inactivity timeout → reset states');
+
+        await redis.multi()
+            .set(`user:${jid}:state`, 'normal')
+            .del(`user:${jid}:owner_replied_at`)
+            .del(`user:${jid}:msg_count`)
+            .exec();
+    }
+
+    // simpan interaction terbaru
+    await redis.set(`user:${jid}:last_interaction_at`, now);
+
+    /* =====================
+       OWNER REPLY TIMEOUT
+    ====================== */
+    const ownerRepliedAt =
+        Number(await redis.get(`user:${jid}:owner_replied_at`)) || 0;
+
+    if (
+        ownerRepliedAt &&
+        now - ownerRepliedAt <= OWNER_REPLY_TIMEOUT_MS
+    ) {
+        console.log('🙋 owner replied recently → bot off');
+        return;
+    }
+
+    /* =====================
+       OWNER PRESENCE
+    ====================== */
     const ownerStatus = await getOwnerStatus();
-    console.log('👤', ownerStatus);
+    console.log('👤 owner status:', ownerStatus);
     if (ownerStatus === 'online') return;
 
     // pesan terlalu pendek
     if (text.length < 2) return;
 
+    await delay(1200);
+
     /* =====================
        SPAM DETECTION
     ====================== */
-    const now = Date.now();
     const lastMsgAt =
         Number(await redis.get(`user:${jid}:last_msg_at`)) || 0;
+
     let msgCount =
         Number(await redis.get(`user:${jid}:msg_count`)) || 0;
 
@@ -76,9 +111,11 @@ export async function handleAutoReply(sock, msg, text) {
 
     if (msgCount >= SPAM_LIMIT) {
         console.log('🚨 spam detected');
+
         await sock.sendMessage(jid, {
             text: 'jangan ngespam ya 🙏'
         });
+
         await redis.set(`user:${jid}:msg_count`, 0);
         return;
     }
@@ -88,9 +125,10 @@ export async function handleAutoReply(sock, msg, text) {
     ====================== */
     const state =
         (await redis.get(`user:${jid}:state`)) || 'normal';
+
     console.log('🤖 state:', state);
 
-    // 1️⃣ First auto reply
+    /* 1️⃣ NORMAL */
     if (state === 'normal') {
         await sock.sendMessage(jid, {
             text:
@@ -103,10 +141,11 @@ export async function handleAutoReply(sock, msg, text) {
         return;
     }
 
-    // 2️⃣ Waiting confirmation
+    /* 2️⃣ OFFERED AI */
     if (state === 'offered_ai') {
         if (text.trim().toLowerCase() === 'iya') {
             await redis.set(`user:${jid}:state`, 'ai_mode');
+
             await sock.sendMessage(jid, {
                 text: 'Oke 👍 kamu bisa tanya apa aja tentang aku.'
             });
@@ -114,29 +153,50 @@ export async function handleAutoReply(sock, msg, text) {
         return;
     }
 
-    // 3️⃣ AI MODE
+    /* 3️⃣ AI MODE */
     if (state === 'ai_mode') {
         let reply;
 
         try {
             reply = await askGroq(
                 `
-Kamu adalah AI pribadi Ilham.
-
-Aturan:
-- HANYA jawab pertanyaan tentang Ilham
-- Kalau di luar topik, jawab sopan bahwa kamu hanya bisa menjawab tentang Ilham
-- Jawaban singkat, santai, manusiawi
-
-Tentang Ilham:
-Ilham adalah software engineer.
-Fokus backend, DevOps, automation.
-Suka bangun sistem sendiri dan tools internal.
-
-Pertanyaan:
-"${text}"
-        `.trim()
+            Kamu adalah AI pribadi Ilham.
+            Gaya bicara kamu HARUS seperti orang ngobrol santai di WhatsApp.
+            
+            KEPRIBADIAN KAMU:
+            - Ramah, santai, fun
+            - Jawaban terasa manusiawi, bukan robot
+            - Kadang pakai emoji ringan , tapi jangan berlebihan
+            - Boleh bercanda ringan kalau konteksnya cocok
+            - Jangan terlalu panjang kecuali memang perlu
+            
+            ATURAN PENTING:
+            - Kamu HANYA boleh menjawab hal-hal tentang Ilham
+            - Kalau pertanyaan di luar topik Ilham, jawab dengan sopan dan santai
+            - Jangan mengarang fakta
+            - Jangan bilang kamu AI atau bot kecuali ditanya langsung
+            
+            TENTANG ILHAM:
+            - Software engineer
+            - Fokus backend, DevOps, automation
+            - Suka bangun sistem sendiri & tools internal
+            - Tipe orang yang suka efisiensi dan eksplor hal teknis
+            
+            CONTOH GAYA JAWABAN:
+            User: Ilham orangnya kayak gimana?
+            AI: Santai tapi fokus 😄 Kalau lagi ngoding bisa serius, tapi ngobrol tetap enak.
+            
+            User: Ilham jago frontend?
+            AI: Lebih jago backend sih 😅 Tapi frontend tetap bisa kalau dibutuhin.
+            
+            User: Kamu siapa?
+            AI: Aku bantu jawab soal Ilham aja ya 🙂
+            
+            SEKARANG JAWAB PERTANYAAN INI DENGAN GAYA OBROLAN:
+            "${text}"
+            `.trim()
             );
+
         } catch (err) {
             console.error('❌ Groq error:', err.message);
             reply =

@@ -1,5 +1,6 @@
 import express from 'express';
 import adminRoutes from './routes/admin.route.js';
+import waRoutes from './routes/wa.route.js';
 
 export function createApp() {
   const app = express();
@@ -10,6 +11,8 @@ export function createApp() {
   });
 
   app.use('/admin', adminRoutes);
+  app.use('/api/wa', waRoutes);
+
 
   return app;
 }

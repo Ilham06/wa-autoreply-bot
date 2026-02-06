@@ -50,6 +50,7 @@ export async function askGroq(question) {
   const res = await groq.chat.completions.create({
     model: 'llama-3.1-8b-instant',
     temperature: 0.6, // natural tapi masih stabil
+    top_p: 0.9,
     messages: [
       {
         role: 'system',

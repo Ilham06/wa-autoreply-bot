@@ -1,5 +1,5 @@
 import express from 'express';
-import { getLastQr, isWaReady, logoutWA, startWA } from '../whatsapp/client.js';
+import { getLastQr, isWaReady, logoutWA, resetWA, startWA } from '../whatsapp/client.js';
 import QRCode from 'qrcode';
 
 const router = express.Router();
@@ -82,5 +82,11 @@ router.post('/logout', async (req, res) => {
     message: 'WhatsApp logged out'
   });
 });
+
+router.post('/reset', async (req, res) => {
+  const result = await resetWA(req.app.locals.onMessage);
+  res.json(result);
+});
+
 
 export default router;

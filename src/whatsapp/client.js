@@ -3,6 +3,12 @@ import makeWASocket, {
   DisconnectReason
 } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
+import fs from 'fs';
+
+/**
+ * CONSTANT
+ */
+const AUTH_DIR = 'auth';
 
 /**
  * GLOBAL STATE
@@ -22,7 +28,9 @@ let waState = 'idle';
  */
 let restartedAfterPairing = false;
 
-/* ========= GETTERS ========= */
+/* =====================
+   GETTERS
+===================== */
 export function isWaReady() {
   return waReady;
 }
@@ -35,7 +43,31 @@ export function getWaState() {
   return waState;
 }
 
-/* ========= START WA ========= */
+/* =====================
+   INTERNAL HELPERS
+===================== */
+function clearAuth() {
+  try {
+    if (fs.existsSync(AUTH_DIR)) {
+      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+      console.log('🧹 Auth folder cleared');
+    }
+  } catch (err) {
+    console.error('❌ Failed to clear auth:', err);
+  }
+}
+
+function resetRuntimeState() {
+  sock = null;
+  waReady = false;
+  lastQr = null;
+  waState = 'idle';
+  restartedAfterPairing = false;
+}
+
+/* =====================
+   START WA
+===================== */
 export async function startWA(onMessage) {
   if (
     waState === 'starting' ||
@@ -50,7 +82,8 @@ export async function startWA(onMessage) {
   waState = 'starting';
   console.log('🚀 Starting WhatsApp socket...');
 
-  const { state, saveCreds } = await useMultiFileAuthState('auth');
+  const { state, saveCreds } =
+    await useMultiFileAuthState(AUTH_DIR);
 
   sock = makeWASocket({
     auth: state,
@@ -63,7 +96,7 @@ export async function startWA(onMessage) {
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    /* === QR === */
+    /* === QR AVAILABLE === */
     if (qr) {
       waState = 'waiting_qr';
       lastQr = qr;
@@ -93,18 +126,16 @@ export async function startWA(onMessage) {
 
       console.log('🔴 WA CLOSED', statusCode);
 
-      /* LOGGED OUT → STOP */
+      /* === LOGGED OUT === */
       if (statusCode === DisconnectReason.loggedOut) {
         console.log('⚠️ Logged out — QR required');
 
+        resetRuntimeState();
         waState = 'disconnected';
-        sock = null;
-        lastQr = null;
-        restartedAfterPairing = false;
         return;
       }
 
-      /* PAIRING SUCCESS → RESTART ONCE */
+      /* === PAIRING SUCCESS → RESTART ONCE === */
       if (
         statusCode === 515 &&
         waState === 'waiting_qr' &&
@@ -118,17 +149,18 @@ export async function startWA(onMessage) {
         lastQr = null;
 
         setTimeout(() => {
-          waState = 'idle';      // 🔥 FIX UTAMA
+          waState = 'idle';
           startWA(onMessage);
         }, 1500);
 
         return;
       }
 
-      /* OTHER */
+      /* === OTHER DISCONNECT === */
       console.log('⚠️ Disconnected, waiting manual reconnect');
+
+      resetRuntimeState();
       waState = 'disconnected';
-      sock = null;
     }
   });
 
@@ -143,7 +175,9 @@ export async function startWA(onMessage) {
   return sock;
 }
 
-/* ========= LOGOUT ========= */
+/* =====================
+   LOGOUT (MANUAL)
+===================== */
 export async function logoutWA() {
   if (!sock) {
     return { success: false, message: 'WA not initialized' };
@@ -152,12 +186,10 @@ export async function logoutWA() {
   try {
     await sock.logout();
 
-    sock = null;
-    waReady = false;
-    lastQr = null;
-    waState = 'disconnected';
-    restartedAfterPairing = false;
+    resetRuntimeState();
+    clearAuth();
 
+    waState = 'disconnected';
     console.log('👋 WA LOGGED OUT');
 
     return { success: true };
@@ -165,4 +197,23 @@ export async function logoutWA() {
     console.error('Logout WA error:', err);
     return { success: false, message: err.message };
   }
+}
+
+/* =====================
+   RESET WA (FOR API)
+===================== */
+export async function resetWA(onMessage) {
+  console.log('🔄 Resetting WhatsApp session...');
+
+  resetRuntimeState();
+  clearAuth();
+
+  setTimeout(() => {
+    startWA(onMessage);
+  }, 1000);
+
+  return {
+    success: true,
+    message: 'WhatsApp session reset. Scan QR again.'
+  };
 }

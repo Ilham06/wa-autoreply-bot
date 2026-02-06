@@ -46,16 +46,28 @@ export function getWaState() {
 /* =====================
    INTERNAL HELPERS
 ===================== */
-function clearAuth() {
-  try {
-    if (fs.existsSync(AUTH_DIR)) {
-      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-      console.log('🧹 Auth folder cleared');
+async function clearAuth(retry = 3) {
+  for (let i = 0; i < retry; i++) {
+    try {
+      if (fs.existsSync(AUTH_DIR)) {
+        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+        console.log('🧹 Auth folder cleared');
+      }
+      return true;
+    } catch (err) {
+      if (err.code === 'EBUSY') {
+        console.warn('⏳ Auth busy, retrying...', i + 1);
+        await new Promise(r => setTimeout(r, 500));
+        continue;
+      }
+      throw err;
     }
-  } catch (err) {
-    console.error('❌ Failed to clear auth:', err);
   }
+
+  console.error('❌ Failed to clear auth after retries');
+  return false;
 }
+
 
 function resetRuntimeState() {
   sock = null;
@@ -206,7 +218,15 @@ export async function resetWA(onMessage) {
   console.log('🔄 Resetting WhatsApp session...');
 
   resetRuntimeState();
-  clearAuth();
+  const cleared = await clearAuth();
+  if (!cleared) {
+    return {
+      success: false,
+      message: 'Auth folder busy. Try reset again.'
+    };
+  }
+
+  startWA(onMessage);
 
   setTimeout(() => {
     startWA(onMessage);

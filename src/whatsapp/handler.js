@@ -2,21 +2,19 @@ import { redis } from '../db/redis.js';
 import { handleAutoReply } from '../services/autoReply.service.js';
 
 export async function handleMessage(sock, msg) {
-  const jid = msg.key.remoteJid;
+  const jid = msg.key.remoteJidAlt || msg.key.remoteJid;
   const fromMe = msg.key.fromMe;
 
-  if (msg.key.fromMe) {
-    const jid =
-      msg.key.remoteJidAlt || msg.key.remoteJid;
-  
+  if (fromMe) {
     // tandai bahwa owner sudah ambil alih
-    await redis.set(`user:${jid}:owner_replied`, '1');
+    const now = Date.now();
+    await redis.multi()
+      .set(`user:${jid}:owner_replied_at`, now)
+      .set(`user:${jid}:state`, 'normal')
+      .del(`user:${jid}:ai_credit_shown`)
+      .exec();
     return;
   }
-  
-
-  // abaikan pesan dari diri sendiri
-  if (fromMe) return;
 
   const text =
     msg.message?.conversation ||

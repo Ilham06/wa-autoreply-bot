@@ -1,6 +1,5 @@
 import express from 'express';
-import adminRoutes from './routes/admin.route.js';
-import waRoutes from './routes/wa.route.js';
+import { registerRoutes } from './routes/index.js';
 
 export function createApp() {
   const app = express();
@@ -10,9 +9,7 @@ export function createApp() {
     res.json({ status: 'ok' });
   });
 
-  app.use('/admin', adminRoutes);
-  app.use('/api/wa', waRoutes);
-
+  registerRoutes(app);
 
   return app;
 }

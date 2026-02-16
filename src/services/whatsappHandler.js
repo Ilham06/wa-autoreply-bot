@@ -1,5 +1,5 @@
-import { redis } from '../db/redis.js';
-import { handleAutoReply } from '../services/autoReply.service.js';
+import { redis } from '../config/redis.js';
+import { handleAutoReply } from './autoReply.service.js';
 
 export async function handleMessage(sock, msg) {
   const jid = msg.key.remoteJidAlt || msg.key.remoteJid;

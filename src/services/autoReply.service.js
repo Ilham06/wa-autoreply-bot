@@ -1,8 +1,8 @@
-import { redis } from '../db/redis.js';
-import { askGroq } from '../ai/groq.js';
+import { redis } from '../config/redis.js';
+import { askGroq } from './groq.service.js';
 import { getOwnerStatus } from './presence.service.js';
 import { delay } from '../utils/delay.js';
-import { isWaReady } from '../whatsapp/client.js';
+import { isWaReady } from './whatsappClient.js';
 import { isOutsideWorkingHours } from '../utils/time.js';
 
 /* =====================

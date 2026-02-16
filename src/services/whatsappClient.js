@@ -30,7 +30,7 @@ let waState = 'idle';
 let restartedAfterPairing = false;
 
 /* =====================
-   GETTERS
+  GETTERS
 ===================== */
 export function isWaReady() {
   return waReady;
@@ -45,7 +45,7 @@ export function getWaState() {
 }
 
 /* =====================
-   INTERNAL HELPERS
+  INTERNAL HELPERS
 ===================== */
 async function clearAuth(retry = 3) {
   for (let i = 0; i < retry; i++) {
@@ -77,7 +77,6 @@ async function clearAuth(retry = 3) {
   return false;
 }
 
-
 function resetRuntimeState() {
   sock = null;
   waReady = false;
@@ -87,7 +86,7 @@ function resetRuntimeState() {
 }
 
 /* =====================
-   START WA
+  START WA
 ===================== */
 export async function startWA(onMessage) {
   if (
@@ -197,7 +196,7 @@ export async function startWA(onMessage) {
 }
 
 /* =====================
-   LOGOUT (MANUAL)
+  LOGOUT (MANUAL)
 ===================== */
 export async function logoutWA() {
   if (!sock) {
@@ -221,7 +220,7 @@ export async function logoutWA() {
 }
 
 /* =====================
-   RESET WA (FOR API)
+  RESET WA (FOR API)
 ===================== */
 export async function resetWA(onMessage) {
   console.log('🔄 Resetting WhatsApp session...');

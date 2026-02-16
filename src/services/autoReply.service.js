@@ -42,26 +42,6 @@ export async function handleAutoReply(sock, msg, text) {
         return;
     }
 
-    /* =====================
-       BASIC GUARD
-    ===================== */
-    if (!isWaReady()) {
-        await sock.sendMessage(jid, {
-            text: 'Ilham lagi offline ya, nanti aku balas 🙏' + BOT_CREDIT
-        });
-        return;
-    }
-
-    if (isOutsideWorkingHours()) {
-        await sock.sendMessage(jid, {
-            text:
-                'Ilham lagi di luar jam kerja ya 🙏\n' +
-                'Nanti aktif lagi di jam kerja.' +
-                BOT_CREDIT
-        });
-        return;
-    }
-
     // ❌ GROUP
     if (jid.endsWith('@g.us')) {
         return;
@@ -85,6 +65,29 @@ export async function handleAutoReply(sock, msg, text) {
         !jid.endsWith('@s.whatsapp.net') &&
         !jid.endsWith('@lid')
     ) return;
+
+    /* =====================
+       BASIC GUARD
+    ===================== */
+    if (!isWaReady()) {
+        const hasAuth = !!sock?.authState?.creds?.me?.id;
+        if (hasAuth) {
+            await sock.sendMessage(jid, {
+                text: 'Ilham lagi offline ya, nanti aku balas 🙏' + BOT_CREDIT
+            });
+        }
+        return;
+    }
+
+    if (isOutsideWorkingHours()) {
+        await sock.sendMessage(jid, {
+            text:
+                'Ilham lagi di luar jam kerja ya 🙏\n' +
+                'Nanti aktif lagi di jam kerja.' +
+                BOT_CREDIT
+        });
+        return;
+    }
 
     /* =====================
        LAST INTERACTION TIMEOUT

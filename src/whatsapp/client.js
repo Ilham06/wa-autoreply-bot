@@ -4,6 +4,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
+import path from 'path';
 
 /**
  * CONSTANT
@@ -49,13 +50,21 @@ export function getWaState() {
 async function clearAuth(retry = 3) {
   for (let i = 0; i < retry; i++) {
     try {
-      if (fs.existsSync(AUTH_DIR)) {
-        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-        console.log('🧹 Auth folder cleared');
+      if (!fs.existsSync(AUTH_DIR)) {
+        fs.mkdirSync(AUTH_DIR, { recursive: true });
+      } else {
+        for (const entry of fs.readdirSync(AUTH_DIR)) {
+          fs.rmSync(path.join(AUTH_DIR, entry), {
+            recursive: true,
+            force: true
+          });
+        }
       }
+
+      console.log('🧹 Auth folder cleared');
       return true;
     } catch (err) {
-      if (err.code === 'EBUSY') {
+      if (err.code === 'EBUSY' || err.code === 'EPERM') {
         console.warn('⏳ Auth busy, retrying...', i + 1);
         await new Promise(r => setTimeout(r, 500));
         continue;

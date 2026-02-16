@@ -4,18 +4,7 @@ import { getOwnerStatus } from './presence.service.js';
 import { delay } from '../utils/delay.js';
 import { isWaReady } from './whatsappClient.js';
 import { isOutsideWorkingHours } from '../utils/time.js';
-
-/* =====================
-   CONSTANTS
-===================== */
-const SPAM_LIMIT = 5;
-const SPAM_WINDOW_MS = 10_000;
-
-const AI_MODE_TIMEOUT_MS = 60 * 60 * 1000; // 1 jam
-const OWNER_REPLY_TIMEOUT_MS = 60 * 60 * 1000; // 1 jam
-
-const BOT_CREDIT = '\n\n_(dibalas oleh Bot)_';
-const AI_CREDIT = '\n\n_(dibalas oleh AI)_';
+import { getActiveBotConfig } from './botConfig.service.js';
 
 /* =====================
    MAIN HANDLER
@@ -66,6 +55,18 @@ export async function handleAutoReply(sock, msg, text) {
         !jid.endsWith('@lid')
     ) return;
 
+    let config;
+    try {
+        config = await getActiveBotConfig();
+    } catch (err) {
+        console.error('❌ Bot config missing:', err.message);
+        return;
+    }
+
+    const setting = config.setting;
+    const botCredit = setting.botCredit || '';
+    const aiCredit = setting.aiCredit || '';
+
     /* =====================
        BASIC GUARD
     ===================== */
@@ -73,18 +74,19 @@ export async function handleAutoReply(sock, msg, text) {
         const hasAuth = !!sock?.authState?.creds?.me?.id;
         if (hasAuth) {
             await sock.sendMessage(jid, {
-                text: 'Ilham lagi offline ya, nanti aku balas 🙏' + BOT_CREDIT
+                text: setting.offlineReplyText + botCredit
             });
         }
         return;
     }
 
-    if (isOutsideWorkingHours()) {
+    if (isOutsideWorkingHours(
+        setting.timezone,
+        setting.offStartMinutes,
+        setting.offEndMinutes
+    )) {
         await sock.sendMessage(jid, {
-            text:
-                'Ilham lagi di luar jam kerja ya 🙏\n' +
-                'Nanti aktif lagi di jam kerja.' +
-                BOT_CREDIT
+            text: setting.outsideHoursReplyText + botCredit
         });
         return;
     }
@@ -97,7 +99,7 @@ export async function handleAutoReply(sock, msg, text) {
 
     if (
         lastInteractionAt &&
-        now - lastInteractionAt > AI_MODE_TIMEOUT_MS
+        now - lastInteractionAt > setting.aiModeTimeoutMs
     ) {
         console.log('⏳ inactivity timeout → reset state');
 
@@ -119,7 +121,7 @@ export async function handleAutoReply(sock, msg, text) {
 
     if (
         ownerRepliedAt &&
-        now - ownerRepliedAt <= OWNER_REPLY_TIMEOUT_MS
+        now - ownerRepliedAt <= setting.ownerReplyTimeoutMs
     ) {
         console.log('🙋 owner replied recently → bot off');
         return;
@@ -145,7 +147,7 @@ export async function handleAutoReply(sock, msg, text) {
     let msgCount =
         Number(await redis.get(`user:${jid}:msg_count`)) || 0;
 
-    if (now - lastMsgAt <= SPAM_WINDOW_MS) {
+    if (now - lastMsgAt <= setting.spamWindowMs) {
         msgCount++;
     } else {
         msgCount = 1;
@@ -154,9 +156,9 @@ export async function handleAutoReply(sock, msg, text) {
     await redis.set(`user:${jid}:last_msg_at`, now);
     await redis.set(`user:${jid}:msg_count`, msgCount);
 
-    if (msgCount >= SPAM_LIMIT) {
+    if (msgCount >= setting.spamLimit) {
         await sock.sendMessage(jid, {
-            text: 'jangan ngespam ya 🙏' + BOT_CREDIT
+            text: setting.spamReplyText + botCredit
         });
 
         await redis.set(`user:${jid}:msg_count`, 0);
@@ -174,11 +176,7 @@ export async function handleAutoReply(sock, msg, text) {
     /* 1️⃣ NORMAL */
     if (state === 'normal') {
         await sock.sendMessage(jid, {
-            text:
-                'Aku lagi offline.\n' +
-                'Mau chat sama AI aku aja?\n' +
-                'Kalau iya, balas *iya*.' +
-                BOT_CREDIT
+            text: setting.aiOfferText + botCredit
         });
 
         await redis.set(`user:${jid}:state`, 'offered_ai');
@@ -192,7 +190,7 @@ export async function handleAutoReply(sock, msg, text) {
             await redis.del(`user:${jid}:ai_credit_shown`);
 
             await sock.sendMessage(jid, {
-                text: 'Oke 👍 kamu bisa tanya apa aja tentang aku.' + BOT_CREDIT
+                text: setting.aiAcceptedText + botCredit
             });
         }
         return;
@@ -203,35 +201,15 @@ export async function handleAutoReply(sock, msg, text) {
         let reply;
 
         try {
-            reply = await askGroq(
-                `
-Kamu adalah AI pribadi Ilham.
-
-Gaya bicara WAJIB:
-- Seperti ngobrol di WhatsApp
-- Santai, nggak formal
-- Nggak sok pintar
-- Nggak kaku
-- Boleh pakai emoji ringan (😄🙂) tapi secukupnya
-- Boleh pakai kata pengisi ringan kalau natural (hehe, iya, hmm)
-
-Aturan penting:
-- Jawab singkat (1–3 kalimat)
-- Jangan jawab terlalu rapi seperti artikel
-- Jangan menyebut diri sebagai AI kecuali ditanya
-- Kalau tidak tahu, bilang dengan santai
-
-Kalau pertanyaan santai → jawab santai  
-Kalau pertanyaan serius → jawab tetap manusiawi
-
-CONTOH:
-User: Ilham orangnya gimana?
-AI: Santai tapi fokus 😄 Kalau kerja bisa serius, tapi ngobrol tetap enak.
-
-SEKARANG JAWAB:
-"${text}"
-        `.trim()
-            );
+            reply = await askGroq(text, {
+                aiModel: setting.aiModel,
+                aiTemperature: setting.aiTemperature,
+                aiTopP: setting.aiTopP,
+                aiMaxTokens: setting.aiMaxTokens,
+                systemPrompt: setting.systemPrompt,
+                sourceOfTruth: setting.sourceOfTruth,
+                aiBehavior: setting.aiBehavior
+            });
         } catch (err) {
             console.error('❌ Groq error:', err.message);
             reply =
@@ -242,7 +220,7 @@ SEKARANG JAWAB:
             await redis.get(`user:${jid}:ai_credit_shown`);
 
         if (!aiCreditShown) {
-            reply += AI_CREDIT;
+            reply += aiCredit;
             await redis.set(`user:${jid}:ai_credit_shown`, '1');
         }
 

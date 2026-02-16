@@ -1,9 +1,13 @@
-export function isOutsideWorkingHours() {
+export function isOutsideWorkingHours(
+  timezone = 'Asia/Jakarta',
+  offStartMinutes = 20 * 60 + 30,
+  offEndMinutes = 10 * 60
+) {
   const now = new Date();
 
   // Ambil waktu WIB langsung, bukan waktu container
   const parts = new Intl.DateTimeFormat('id-ID', {
-    timeZone: 'Asia/Jakarta',
+    timeZone: timezone,
     hour: '2-digit',
     minute: '2-digit',
     hour12: false
@@ -14,8 +18,5 @@ export function isOutsideWorkingHours() {
 
   const current = hour * 60 + minute;
 
-  const startOff = 20 * 60 + 30; // 20:30
-  const endOff = 10 * 60;        // 10:00
-
-  return current >= startOff || current < endOff;
+  return current >= offStartMinutes || current < offEndMinutes;
 }

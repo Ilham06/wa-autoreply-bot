@@ -1,4 +1,4 @@
-import { redis } from '../db/redis.js';
+import { redis } from '../config/redis.js';
 
 const OWNER_KEY = 'system:owner_status';
 

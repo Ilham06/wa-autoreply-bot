@@ -1,46 +1,53 @@
-import { redis } from '../db/redis.js';
-import { askGroq } from '../ai/groq.js';
+import { redis } from '../config/redis.js';
+import { askGroq } from './groq.service.js';
 import { getOwnerStatus } from './presence.service.js';
 import { delay } from '../utils/delay.js';
-import { isWaReady } from '../whatsapp/client.js';
+import { isWaReady } from './whatsappClient.js';
 import { isOutsideWorkingHours } from '../utils/time.js';
+import { getActiveBotConfig } from './botConfig.service.js';
 
-const SPAM_LIMIT = 5;
-const SPAM_WINDOW_MS = 10_000; // 10 detik
-
+/* =====================
+   MAIN HANDLER
+===================== */
 export async function handleAutoReply(sock, msg, text) {
     const jid =
         msg.key.remoteJidAlt || msg.key.remoteJid;
-        
-    if (!isWaReady()) {
-        await sock.sendMessage(jid, {
-            text: 'Ilham lagi offline ya, nanti aku balas 🙏'
-        });
+
+    const now = Date.now();
+
+    /* =====================
+       ✅ OWNER MANUAL REPLY (FIX)
+       ⛔ JANGAN ADA LOGIC LAIN DI ATAS INI
+    ===================== */
+    if (msg.key.fromMe) {
+        console.log('✋ Owner replied manually → bot off');
+
+        await redis.multi()
+            .set(`user:${jid}:owner_replied_at`, now)
+            .set(`user:${jid}:state`, 'normal')
+            .del(`user:${jid}:ai_credit_shown`)
+            .exec();
+
         return;
     }
 
-    if (isOutsideWorkingHours()) {
-        await sock.sendMessage(jid, {
-          text:
-            'Ilham lagi di luar jam kerja ya 🙏\n' +
-            'Nanti aktif lagi di jam kerja.'
-        });
-        return;
-      }
-
-
-    const ownerReplied =
-        await redis.get(`user:${jid}:owner_replied`);
-
-    if (ownerReplied) {
-        console.log('🙋 owner already replied, bot off');
+    // ❌ GROUP
+    if (jid.endsWith('@g.us')) {
         return;
     }
 
+    // ❌ BROADCAST / STATUS
+    if (
+        jid === 'status@broadcast' ||
+        jid.endsWith('@broadcast')
+    ) {
+        return;
+    }
 
-    await delay(1200);
-
-    
+    // ❌ MESSAGE TANPA TEXT
+    if (!text || typeof text !== 'string') {
+        return;
+    }
 
     // hanya chat pribadi
     if (
@@ -48,24 +55,99 @@ export async function handleAutoReply(sock, msg, text) {
         !jid.endsWith('@lid')
     ) return;
 
-    // cek owner status
+    let config;
+    try {
+        config = await getActiveBotConfig();
+    } catch (err) {
+        console.error('❌ Bot config missing:', err.message);
+        return;
+    }
+
+    const setting = config.setting;
+    const botCredit = setting.botCredit || '';
+    const aiCredit = setting.aiCredit || '';
+
+    /* =====================
+       BASIC GUARD
+    ===================== */
+    if (!isWaReady()) {
+        const hasAuth = !!sock?.authState?.creds?.me?.id;
+        if (hasAuth) {
+            await sock.sendMessage(jid, {
+                text: setting.offlineReplyText + botCredit
+            });
+        }
+        return;
+    }
+
+    if (isOutsideWorkingHours(
+        setting.timezone,
+        setting.offStartMinutes,
+        setting.offEndMinutes
+    )) {
+        await sock.sendMessage(jid, {
+            text: setting.outsideHoursReplyText + botCredit
+        });
+        return;
+    }
+
+    /* =====================
+       LAST INTERACTION TIMEOUT
+    ===================== */
+    const lastInteractionAt =
+        Number(await redis.get(`user:${jid}:last_interaction_at`)) || 0;
+
+    if (
+        lastInteractionAt &&
+        now - lastInteractionAt > setting.aiModeTimeoutMs
+    ) {
+        console.log('⏳ inactivity timeout → reset state');
+
+        await redis.multi()
+            .set(`user:${jid}:state`, 'normal')
+            .del(`user:${jid}:owner_replied_at`)
+            .del(`user:${jid}:msg_count`)
+            .del(`user:${jid}:ai_credit_shown`)
+            .exec();
+    }
+
+    await redis.set(`user:${jid}:last_interaction_at`, now);
+
+    /* =====================
+       OWNER REPLY TIMEOUT
+    ===================== */
+    const ownerRepliedAt =
+        Number(await redis.get(`user:${jid}:owner_replied_at`)) || 0;
+
+    if (
+        ownerRepliedAt &&
+        now - ownerRepliedAt <= setting.ownerReplyTimeoutMs
+    ) {
+        console.log('🙋 owner replied recently → bot off');
+        return;
+    }
+
+    /* =====================
+       OWNER PRESENCE
+    ===================== */
     const ownerStatus = await getOwnerStatus();
-    console.log('👤', ownerStatus);
+    console.log('👤 owner status:', ownerStatus);
     if (ownerStatus === 'online') return;
 
-    // pesan terlalu pendek
     if (text.length < 2) return;
+
+    await delay(1200);
 
     /* =====================
        SPAM DETECTION
-    ====================== */
-    const now = Date.now();
+    ===================== */
     const lastMsgAt =
         Number(await redis.get(`user:${jid}:last_msg_at`)) || 0;
+
     let msgCount =
         Number(await redis.get(`user:${jid}:msg_count`)) || 0;
 
-    if (now - lastMsgAt <= SPAM_WINDOW_MS) {
+    if (now - lastMsgAt <= setting.spamWindowMs) {
         msgCount++;
     } else {
         msgCount = 1;
@@ -74,73 +156,72 @@ export async function handleAutoReply(sock, msg, text) {
     await redis.set(`user:${jid}:last_msg_at`, now);
     await redis.set(`user:${jid}:msg_count`, msgCount);
 
-    if (msgCount >= SPAM_LIMIT) {
-        console.log('🚨 spam detected');
+    if (msgCount >= setting.spamLimit) {
         await sock.sendMessage(jid, {
-            text: 'jangan ngespam ya 🙏'
+            text: setting.spamReplyText + botCredit
         });
+
         await redis.set(`user:${jid}:msg_count`, 0);
         return;
     }
 
     /* =====================
        STATE MACHINE
-    ====================== */
+    ===================== */
     const state =
         (await redis.get(`user:${jid}:state`)) || 'normal';
+
     console.log('🤖 state:', state);
 
-    // 1️⃣ First auto reply
+    /* 1️⃣ NORMAL */
     if (state === 'normal') {
         await sock.sendMessage(jid, {
-            text:
-                'Aku lagi offline.\n' +
-                'Mau chat sama AI aku aja?\n' +
-                'Kalau iya, balas *iya*.'
+            text: setting.aiOfferText + botCredit
         });
 
         await redis.set(`user:${jid}:state`, 'offered_ai');
         return;
     }
 
-    // 2️⃣ Waiting confirmation
+    /* 2️⃣ OFFERED AI */
     if (state === 'offered_ai') {
         if (text.trim().toLowerCase() === 'iya') {
             await redis.set(`user:${jid}:state`, 'ai_mode');
+            await redis.del(`user:${jid}:ai_credit_shown`);
+
             await sock.sendMessage(jid, {
-                text: 'Oke 👍 kamu bisa tanya apa aja tentang aku.'
+                text: setting.aiAcceptedText + botCredit
             });
         }
         return;
     }
 
-    // 3️⃣ AI MODE
+    /* 3️⃣ AI MODE */
     if (state === 'ai_mode') {
         let reply;
 
         try {
-            reply = await askGroq(
-                `
-Kamu adalah AI pribadi Ilham.
-
-Aturan:
-- HANYA jawab pertanyaan tentang Ilham
-- Kalau di luar topik, jawab sopan bahwa kamu hanya bisa menjawab tentang Ilham
-- Jawaban singkat, santai, manusiawi
-
-Tentang Ilham:
-Ilham adalah software engineer.
-Fokus backend, DevOps, automation.
-Suka bangun sistem sendiri dan tools internal.
-
-Pertanyaan:
-"${text}"
-        `.trim()
-            );
+            reply = await askGroq(text, {
+                aiModel: setting.aiModel,
+                aiTemperature: setting.aiTemperature,
+                aiTopP: setting.aiTopP,
+                aiMaxTokens: setting.aiMaxTokens,
+                systemPrompt: setting.systemPrompt,
+                sourceOfTruth: setting.sourceOfTruth,
+                aiBehavior: setting.aiBehavior
+            });
         } catch (err) {
             console.error('❌ Groq error:', err.message);
             reply =
                 'Maaf ya, aku cuma bisa jawab hal-hal tentang Ilham 🙏';
+        }
+
+        const aiCreditShown =
+            await redis.get(`user:${jid}:ai_credit_shown`);
+
+        if (!aiCreditShown) {
+            reply += aiCredit;
+            await redis.set(`user:${jid}:ai_credit_shown`, '1');
         }
 
         await delay(800);

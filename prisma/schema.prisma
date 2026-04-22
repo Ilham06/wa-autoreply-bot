@@ -1,0 +1,74 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String      @id @default(uuid())
+  email     String      @unique
+  passwordHash String
+  name      String?
+  isActive  Boolean     @default(true)
+  bots      BotConfig[]
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+}
+
+model BotConfig {
+  id          String      @id @default(uuid())
+  userId      String?
+  name        String
+  isActive    Boolean     @default(true)
+  setting     BotSetting?
+
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  user        User?       @relation(fields: [userId], references: [id])
+
+  @@unique([userId, name])
+}
+
+model BotSetting {
+  id                   String   @id @default(uuid())
+  botConfigId          String   @unique
+
+  timezone             String   @default("Asia/Jakarta")
+  offStartMinutes      Int      @default(1230)  // 20:30
+  offEndMinutes        Int      @default(600)   // 10:00
+
+  spamLimit            Int      @default(5)
+  spamWindowMs         Int      @default(10000)
+  aiModeTimeoutMs      Int      @default(3600000)
+  ownerReplyTimeoutMs  Int      @default(3600000)
+
+  aiModel              String   @default("llama-3.1-8b-instant")
+  aiTemperature        Float    @default(0.6)
+  aiTopP               Float    @default(0.9)
+  aiMaxTokens          Int?
+
+  allowEmoji           Boolean  @default(true)
+  emojiStyle           String?
+
+  systemPrompt         String   @db.Text
+  sourceOfTruth        String   @db.Text
+  aiBehavior           String   @db.Text
+
+  offlineReplyText     String   @db.Text
+  outsideHoursReplyText String  @db.Text
+  spamReplyText        String   @db.Text
+  aiOfferText          String   @db.Text
+  aiAcceptedText       String   @db.Text
+
+  botCredit            String   @db.Text
+  aiCredit             String   @db.Text
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  botConfig            BotConfig @relation(fields: [botConfigId], references: [id])
+}
